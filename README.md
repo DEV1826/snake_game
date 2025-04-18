@@ -16,3 +16,17 @@ For help getting started with Flutter development, view the
 samples, guidance on mobile development, and a full API reference.
 # snake_game
 # snake_game
+
+
+#Install and Run
+
+<<Coller dans le terminal>>
+ git clone https://github.com/DEV1826/snake_game
+
+ cd snake_game
+
+<<Prepare votre emulator eg android studio virtual>>
+
+ flutter run
+
+
