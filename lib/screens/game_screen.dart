@@ -49,14 +49,36 @@ class _GameScreenState extends State<GameScreen> {
         setState(() => gameState = state);
       },
       onErrorMessage: (message) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(message), duration: const Duration(seconds: 3)),
-        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(message), duration: const Duration(seconds: 3)),
+          );
+        }
       },
       onConnectionStatusChanged: (connected) {
         if (!connected && mounted) {
-          Navigator.pop(context); // Return to menu if disconnected
+          // Show a message before returning to menu
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Lost connection to game server'),
+              backgroundColor: Colors.red,
+              duration: Duration(seconds: 2),
+            ),
+          );
+          
+          // Wait briefly before navigating back
+          Future.delayed(const Duration(seconds: 1), () {
+            if (mounted) {
+              Navigator.pop(context); // Return to menu if disconnected
+            }
+          });
         }
+      },
+      onGameStarted: () {
+        // Game has started, make sure we're not paused
+        setState(() {
+          paused = false;
+        });
       },
     );
     
@@ -69,13 +91,25 @@ class _GameScreenState extends State<GameScreen> {
   
   Future<void> _setupNetwork() async {
     // Show loading indicator
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => const Center(
-        child: CircularProgressIndicator(color: Colors.orange),
-      ),
-    );
+    if (mounted) {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => const Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircularProgressIndicator(color: Colors.orange),
+              SizedBox(height: 16),
+              Text(
+                'Setting up network...',
+                style: TextStyle(color: Colors.white),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
     
     try {
       await network.initialize();
@@ -107,6 +141,17 @@ class _GameScreenState extends State<GameScreen> {
           // Create local game with a snake if hosting failed
           gameState.spawnSnake(0);
           gameState.spawnFood(cols: cols, rows: rows);
+        } else {
+          // Show hosting info if successful
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Hosting game at ${network.lobby.hostIp}:${network.lobby.port}'),
+                backgroundColor: Colors.green,
+                duration: const Duration(seconds: 5),
+              ),
+            );
+          }
         }
       } else {
         // Join mode
@@ -140,6 +185,17 @@ class _GameScreenState extends State<GameScreen> {
                   Navigator.pop(context);
                 }
               });
+            }
+          } else {
+            // Show success message when joined
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Successfully joined ${network.lobby.hostName}\'s game'),
+                  backgroundColor: Colors.green,
+                  duration: const Duration(seconds: 3),
+                ),
+              );
             }
           }
         } else {
@@ -217,6 +273,9 @@ class _GameScreenState extends State<GameScreen> {
 
   // Update game state logic
   void _updateGameState() {
+    // In multiplayer, only the host updates the game state
+    if (!widget.isHost) return;
+    
     // Move snakes
     for (var snake in gameState.snakes) {
       if (snake.isDead) continue;
@@ -294,7 +353,8 @@ class _GameScreenState extends State<GameScreen> {
     }
     
     // Check if game over (all snakes dead)
-    if (gameState.snakes.every((s) => s.isDead)) {
+    bool allDead = gameState.snakes.every((s) => s.isDead);
+    if (allDead && gameState.snakes.isNotEmpty) {
       // Reset game after a delay
       Future.delayed(const Duration(seconds: 2), () {
         if (mounted && widget.isHost) {
@@ -302,49 +362,74 @@ class _GameScreenState extends State<GameScreen> {
         }
       });
     }
+    
+    // In multiplayer mode, host must broadcast the updated state
+    if (widget.isHost && gameState.snakes.isNotEmpty) {
+      network.updateGameState(gameState);
+    }
   }
 
   // Handle direction changes safely
   void _updateSnakeDirection(String newDirection) {
+    // Find the player's snake (id matches network playerId)
+    final mySnakes = gameState.snakes.where((s) => s.id == network.playerId);
+    if (mySnakes.isEmpty) return;
+    
+    final mySnake = mySnakes.first;
+    final current = mySnake.direction;
+    
+    // Prevent reversing direction
+    if ((current == 'up' && newDirection == 'down') ||
+        (current == 'down' && newDirection == 'up') ||
+        (current == 'left' && newDirection == 'right') ||
+        (current == 'right' && newDirection == 'left')) {
+      return; // Ignore invalid direction changes
+    }
+    
     // In single player or as host
     if (widget.isHost) {
-      if (gameState.snakes.isEmpty) return;
-      
-      // Find the player's snake (id matches network playerId)
-      final mySnakes = gameState.snakes.where((s) => s.id == network.playerId);
-      if (mySnakes.isEmpty) return;
-      
-      final mySnake = mySnakes.first;
-      
-      // Prevent reversing direction
-      final current = mySnake.direction;
-      if ((current == 'up' && newDirection != 'down') ||
-          (current == 'down' && newDirection != 'up') ||
-          (current == 'left' && newDirection != 'right') ||
-          (current == 'right' && newDirection != 'left')) {
-        setState(() {
-          mySnake.direction = newDirection;
-        });
-      }
+      setState(() {
+        mySnake.direction = newDirection;
+      });
     } 
     // In multiplayer as client
     else {
+      // Send move to host
       network.sendMove(newDirection);
+      
+      // Also update locally for responsive feel
+      setState(() {
+        mySnake.direction = newDirection;
+      });
     }
   }
 
   @override
   void dispose() {
+    print('GameScreen being disposed');
+    // Cancel game timer
     _timer?.cancel();
+    
+    // Explicitly clean up network resources
     network.dispose();
+    
     super.dispose();
   }
   
   void _resetGame() {
     setState(() {
-      gameState = GameState();
-      gameState.spawnSnake(0, cols: cols, rows: rows);
-      gameState.spawnFood(cols: cols, rows: rows);
+      if (widget.isHost) {
+        // Host controls game reset
+        gameState = GameState();
+        gameState.spawnSnake(network.playerId, cols: cols, rows: rows);
+        gameState.spawnFood(cols: cols, rows: rows);
+        
+        // In multiplayer mode, broadcast the updated state
+        network.updateGameState(gameState);
+      } else {
+        // Clients just wait for the host to reset
+        gameState = GameState();
+      }
       paused = false;
     });
   }
@@ -361,195 +446,235 @@ class _GameScreenState extends State<GameScreen> {
     final cellHeight = gameAreaHeight / rows;
     cellSize = cellWidth < cellHeight ? cellWidth : cellHeight;
     
-    return Scaffold(
-      backgroundColor: const Color.fromARGB(255, 3, 28, 70),
-      body: SafeArea(
-        child: Column(
-          children: [
-            // Top bar with controls
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              color: Colors.black.withOpacity(0.3),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Row(
-                    children: [
-                      _topBarButton(
-                        icon: Icons.pause,
-                        label: paused ? 'Resume' : 'Pause',
-                        onTap: () {
-                          setState(() {
-                            paused = !paused;
-                          });
-                        },
-                      ),
-                      const SizedBox(width: 16),
-                      _topBarButton(
-                        icon: Icons.refresh,
-                        label: 'Reset',
-                        onTap: _resetGame,
-                      ),
-                    ],
-                  ),
-                  Text(
-                    'SCORE: ${_getPlayerScore()}',
-                    style: const TextStyle(
-                      fontSize: 18,
-                      color: Colors.white,
-                      letterSpacing: 1,
-                      fontWeight: FontWeight.bold,
-                      fontFamily: 'Arial',
+    return WillPopScope(
+      onWillPop: () async {
+        // Ensure proper cleanup when back button is pressed
+        print('Back button pressed, cleaning up network resources');
+        
+        // Cancel game loop timer
+        _timer?.cancel();
+        
+        // Clean up network resources
+        network.dispose();
+        
+        // Allow navigation to proceed
+        return true;
+      },
+      child: Scaffold(
+        backgroundColor: const Color.fromARGB(255, 3, 28, 70),
+        body: SafeArea(
+          child: Column(
+            children: [
+              // Top bar with controls
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                color: Colors.black.withOpacity(0.3),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Row(
+                      children: [
+                        _topBarButton(
+                          icon: Icons.pause,
+                          label: paused ? 'Resume' : 'Pause',
+                          onTap: () {
+                            setState(() {
+                              paused = !paused;
+                            });
+                          },
+                        ),
+                        const SizedBox(width: 16),
+                        _topBarButton(
+                          icon: Icons.refresh,
+                          label: 'Reset',
+                          onTap: _resetGame,
+                        ),
+                      ],
                     ),
-                  ),
-                  Row(
-                    children: [
-                      _topBarButton(
-                        icon: Icons.settings,
-                        label: 'CONTROLS',
-                        onTap: _showControlsDialog,
+                    Text(
+                      'SCORE: ${_getPlayerScore()}',
+                      style: const TextStyle(
+                        fontSize: 18,
+                        color: Colors.white,
+                        letterSpacing: 1,
+                        fontWeight: FontWeight.bold,
+                        fontFamily: 'Arial',
                       ),
-                      const SizedBox(width: 16),
-                      _topBarButton(
-                        icon: Icons.exit_to_app,
-                        label: 'EXIT',
-                        onTap: () {
-                          Navigator.pop(context); // Return to main menu
-                        },
-                      ),
-                    ],
-                  ),
-                ],
+                    ),
+                    Row(
+                      children: [
+                        _topBarButton(
+                          icon: Icons.settings,
+                          label: 'CONTROLS',
+                          onTap: _showControlsDialog,
+                        ),
+                        const SizedBox(width: 16),
+                        _topBarButton(
+                          icon: Icons.exit_to_app,
+                          label: 'EXIT',
+                          onTap: () {
+                            // Ensure proper cleanup before exiting
+                            print('Exit button pressed, cleaning up network resources');
+                            
+                            // Cancel timer and clean up network
+                            _timer?.cancel();
+                            network.dispose();
+                            
+                            // Return to main menu
+                            Navigator.pop(context);
+                          },
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
               ),
-            ),
-            
-            // Game area - takes maximum available space
-            Expanded(
-              child: Center(
-                child: Container(
-                  margin: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    border: Border.all(color: Colors.white, width: 3),
-                    borderRadius: BorderRadius.circular(18),
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(15),
-                    child: LayoutBuilder(
-                      builder: (context, constraints) {
-                        return Stack(
-                          children: [
-                            // Game canvas
-                            CustomPaint(
-                              painter: GamePainter(
-                                gameState,
-                                cellSize: cellSize,
-                                cols: cols,
-                                rows: rows,
+              
+              // Game area - takes maximum available space
+              Expanded(
+                child: Center(
+                  child: Container(
+                    margin: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      border: Border.all(color: Colors.white, width: 3),
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(15),
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          return Stack(
+                            children: [
+                              // Game canvas
+                              CustomPaint(
+                                painter: GamePainter(
+                                  gameState,
+                                  cellSize: cellSize,
+                                  cols: cols,
+                                  rows: rows,
+                                  playerNames: network.playerNames,
+                                ),
+                                size: Size(constraints.maxWidth, constraints.maxHeight),
                               ),
-                              size: Size(constraints.maxWidth, constraints.maxHeight),
-                            ),
-                            
-                            // Game over overlay if any snake is dead
-                            if (gameState.snakes.any((s) => s.isDead))
-                              _buildGameOverScreen(),
-                            
-                            // Swipe detector for the entire game area
-                            if (useSwipeControls && !gameState.snakes.any((s) => s.isDead))
-                              GestureDetector(
-                                behavior: HitTestBehavior.opaque,
-                                onPanStart: (details) {
-                                  _startSwipePosition = details.localPosition;
-                                },
-                                onPanUpdate: (details) {
-                                  if (_startSwipePosition != null) {
-                                    final currentPosition = details.localPosition;
-                                    final dx = currentPosition.dx - _startSwipePosition!.dx;
-                                    final dy = currentPosition.dy - _startSwipePosition!.dy;
-                                    
-                                    // Only process swipe if it's long enough
-                                    if (dx.abs() > _minSwipeDistance || dy.abs() > _minSwipeDistance) {
-                                      // Determine swipe direction
-                                      if (dx.abs() > dy.abs()) {
-                                        // Horizontal swipe
-                                        _updateSnakeDirection(dx > 0 ? 'right' : 'left');
-                                      } else {
-                                        // Vertical swipe
-                                        _updateSnakeDirection(dy > 0 ? 'down' : 'up');
+                              
+                              // Game over overlay if any snake is dead
+                              if (gameState.snakes.any((s) => s.isDead))
+                                _buildGameOverScreen(),
+                              
+                              // Swipe detector for the entire game area
+                              if (useSwipeControls && !gameState.snakes.any((s) => s.isDead))
+                                GestureDetector(
+                                  behavior: HitTestBehavior.opaque,
+                                  onPanStart: (details) {
+                                    _startSwipePosition = details.localPosition;
+                                  },
+                                  onPanUpdate: (details) {
+                                    if (_startSwipePosition != null) {
+                                      final currentPosition = details.localPosition;
+                                      final dx = currentPosition.dx - _startSwipePosition!.dx;
+                                      final dy = currentPosition.dy - _startSwipePosition!.dy;
+                                      
+                                      // Only process swipe if it's long enough
+                                      if (dx.abs() > _minSwipeDistance || dy.abs() > _minSwipeDistance) {
+                                        // Determine swipe direction
+                                        if (dx.abs() > dy.abs()) {
+                                          // Horizontal swipe
+                                          _updateSnakeDirection(dx > 0 ? 'right' : 'left');
+                                        } else {
+                                          // Vertical swipe
+                                          _updateSnakeDirection(dy > 0 ? 'down' : 'up');
+                                        }
+                                        // Reset start position to prevent multiple triggers
+                                        _startSwipePosition = null;
                                       }
-                                      // Reset start position to prevent multiple triggers
-                                      _startSwipePosition = null;
                                     }
-                                  }
-                                },
-                                onPanEnd: (details) {
-                                  _startSwipePosition = null;
-                                },
-                              ),
-                            
-                            // Control buttons if not using swipe
-                            if (!useSwipeControls && !gameState.snakes.any((s) => s.isDead))
-                              Positioned(
-                                left: 0,
-                                right: 0,
-                                bottom: 0,
-                                child: Container(
-                                  height: 150,
-                                  color: Colors.black.withOpacity(0.3),
-                                  child: Column(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Row(
-                                        mainAxisAlignment: MainAxisAlignment.center,
-                                        children: [
-                                          IconButton(
-                                            icon: const Icon(Icons.arrow_upward, color: Colors.white, size: 40),
-                                            onPressed: () => _updateSnakeDirection('up'),
-                                          ),
-                                        ],
-                                      ),
-                                      Row(
-                                        mainAxisAlignment: MainAxisAlignment.center,
-                                        children: [
-                                          IconButton(
-                                            icon: const Icon(Icons.arrow_back, color: Colors.white, size: 40),
-                                            onPressed: () => _updateSnakeDirection('left'),
-                                          ),
-                                          const SizedBox(width: 60),
-                                          IconButton(
-                                            icon: const Icon(Icons.arrow_forward, color: Colors.white, size: 40),
-                                            onPressed: () => _updateSnakeDirection('right'),
-                                          ),
-                                        ],
-                                      ),
-                                      Row(
-                                        mainAxisAlignment: MainAxisAlignment.center,
-                                        children: [
-                                          IconButton(
-                                            icon: const Icon(Icons.arrow_downward, color: Colors.white, size: 40),
-                                            onPressed: () => _updateSnakeDirection('down'),
-                                          ),
-                                        ],
-                                      ),
-                                    ],
+                                  },
+                                  onPanEnd: (details) {
+                                    _startSwipePosition = null;
+                                  },
+                                ),
+                              
+                              // Control buttons if not using swipe
+                              if (!useSwipeControls && !gameState.snakes.any((s) => s.isDead))
+                                Positioned(
+                                  left: 0,
+                                  right: 0,
+                                  bottom: 0,
+                                  child: Container(
+                                    height: 150,
+                                    color: Colors.black.withOpacity(0.3),
+                                    child: Column(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        Row(
+                                          mainAxisAlignment: MainAxisAlignment.center,
+                                          children: [
+                                            IconButton(
+                                              icon: const Icon(Icons.arrow_upward, color: Colors.white, size: 40),
+                                              onPressed: () => _updateSnakeDirection('up'),
+                                            ),
+                                          ],
+                                        ),
+                                        Row(
+                                          mainAxisAlignment: MainAxisAlignment.center,
+                                          children: [
+                                            IconButton(
+                                              icon: const Icon(Icons.arrow_back, color: Colors.white, size: 40),
+                                              onPressed: () => _updateSnakeDirection('left'),
+                                            ),
+                                            const SizedBox(width: 60),
+                                            IconButton(
+                                              icon: const Icon(Icons.arrow_forward, color: Colors.white, size: 40),
+                                              onPressed: () => _updateSnakeDirection('right'),
+                                            ),
+                                          ],
+                                        ),
+                                        Row(
+                                          mainAxisAlignment: MainAxisAlignment.center,
+                                          children: [
+                                            IconButton(
+                                              icon: const Icon(Icons.arrow_downward, color: Colors.white, size: 40),
+                                              onPressed: () => _updateSnakeDirection('down'),
+                                            ),
+                                          ],
+                                        ),
+                                      ],
+                                    ),
                                   ),
                                 ),
-                              ),
-                          ],
-                        );
-                      },
+                            ],
+                          );
+                        },
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
   }
 
   Widget _buildGameOverScreen() {
-    final playerSnake = gameState.snakes.firstWhere((s) => s.id == network.playerId);
+    // Find the player's snake
+    final playerSnakes = gameState.snakes.where((s) => s.id == network.playerId);
+    final playerSnake = playerSnakes.isNotEmpty 
+        ? playerSnakes.first 
+        : Snake(network.playerId, [], 'right', 0, score: 0);
+    
+    // Find the highest scoring snake to determine winner
+    int highestScore = 0;
+    String winnerName = "";
+    
+    for (var snake in gameState.snakes) {
+      if (snake.score > highestScore) {
+        highestScore = snake.score;
+        winnerName = network.playerNames[snake.id] ?? 'Player ${snake.id}';
+      }
+    }
+    
     return Container(
       decoration: BoxDecoration(
         color: Colors.black.withOpacity(0.7),
@@ -577,8 +702,20 @@ class _GameScreenState extends State<GameScreen> {
               ),
             ),
             const SizedBox(height: 16),
+            if (winnerName.isNotEmpty && gameState.snakes.length > 1)
+              Text(
+                'WINNER: $winnerName',
+                style: const TextStyle(
+                  fontSize: 24,
+                  color: Colors.yellow,
+                  letterSpacing: 1,
+                  fontWeight: FontWeight.bold,
+                  fontFamily: 'Arial',
+                ),
+              ),
+            const SizedBox(height: 16),
             Text(
-              'SCORE: ${playerSnake.score}',
+              'YOUR SCORE: ${playerSnake.score}',
               style: const TextStyle(
                 fontSize: 24,
                 color: Colors.white,
@@ -611,7 +748,15 @@ class _GameScreenState extends State<GameScreen> {
             const SizedBox(height: 15),
             GestureDetector(
               onTap: () {
-                Navigator.pop(context); // Return to main menu
+                // Ensure proper cleanup before exiting
+                print('Main menu button pressed, cleaning up network resources');
+                
+                // Cancel timer and clean up network
+                _timer?.cancel();
+                network.dispose();
+                
+                // Return to main menu
+                Navigator.pop(context);
               },
               child: const Text(
                 'MAIN MENU',
@@ -749,12 +894,14 @@ class GamePainter extends CustomPainter {
   final double cellSize;
   final int cols;
   final int rows;
+  final Map<int, String> playerNames;
 
   GamePainter(
     this.gameState, {
     this.cellSize = 32,
     this.cols = 12,
     this.rows = 18,
+    this.playerNames = const {},
   });
 
   @override
@@ -826,8 +973,45 @@ class GamePainter extends CustomPainter {
       );
     }
 
-    // Draw snakes (green, rounded, head with eyes)
+    // Draw snakes (with their proper colors, rounded, head with eyes)
     for (var snake in gameState.snakes) {
+      // Skip empty snakes
+      if (snake.positions.isEmpty) continue;
+      
+      // Draw player name above the snake's head
+      if (snake.positions.isNotEmpty && playerNames.containsKey(snake.id)) {
+        final head = snake.positions.first;
+        final playerName = playerNames[snake.id] ?? 'Player ${snake.id}';
+        final textSpan = TextSpan(
+          text: playerName,
+          style: const TextStyle(
+            color: Colors.grey,
+            fontSize: 14,
+            fontWeight: FontWeight.bold,
+            shadows: [
+              Shadow(
+                blurRadius: 2.0,
+                color: Colors.black,
+                offset: Offset(1, 1),
+              ),
+            ],
+          ),
+        );
+        final textPainter = TextPainter(
+          text: textSpan,
+          textAlign: TextAlign.center,
+          textDirection: TextDirection.ltr,
+        );
+        textPainter.layout();
+        textPainter.paint(
+          canvas,
+          Offset(
+            offsetX + head.dx * cellSize + (cellSize - textPainter.width) / 2,
+            offsetY + head.dy * cellSize - textPainter.height - 2,
+          ),
+        );
+      }
+      
       for (int i = 0; i < snake.positions.length; i++) {
         final pos = snake.positions[i];
         final isHead = i == 0;
@@ -837,8 +1021,10 @@ class GamePainter extends CustomPainter {
           continue;
         }
         
-        // Different colors for head and body
-        paint.color = isHead ? Colors.green[800]! : Colors.green[400]!;
+        // Use snake's color property
+        paint.color = isHead 
+          ? snake.color.withOpacity(0.8) 
+          : snake.color.withOpacity(0.6);
         
         // Create rectangle with proper offset
         final rect = Rect.fromLTWH(

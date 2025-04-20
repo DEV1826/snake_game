@@ -75,6 +75,20 @@ class _ClientLobbyScreenState extends State<ClientLobbyScreen> {
   }
 
   @override
+  void dispose() {
+    print('ClientLobbyScreen being disposed');
+    
+    // If navigating away without game starting, we need to clean up network resources
+    // This ensures client socket is closed and no lingering connections remain
+    if (!widget.networkManager.isGameRunning) {
+      print('Game not started, cleaning up network resources');
+      widget.networkManager.disconnect();
+    }
+    
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF001F3F),

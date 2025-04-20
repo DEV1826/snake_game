@@ -1,10 +1,23 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'screens/root_screen.dart';
 import 'screens/game_screen.dart';
 import 'screens/create_lobby_screen.dart';
 import 'screens/find_games_screen.dart';
+import 'utils/socket_cleanup.dart';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  
+  // Ensure sockets are properly closed when app exits
+  SystemChannels.lifecycle.setMessageHandler((msg) async {
+    if (msg == AppLifecycleState.detached.toString() || 
+        msg == AppLifecycleState.paused.toString()) {
+      await SocketCleanup.closeAllSockets();
+    }
+    return null;
+  });
+  
   runApp(const MyApp());
 }
 

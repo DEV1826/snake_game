@@ -206,7 +206,7 @@ class _HostLobbyScreenState extends State<HostLobbyScreen> {
     
     // Check if all non-host players are ready
     final nonHostPlayers = _lobby!.players.where((player) => player.id != 0).toList();
-    final allPlayersReady = nonHostPlayers.isNotEmpty && nonHostPlayers.every((player) => player.isReady);
+    final allPlayersReady = nonHostPlayers.every((player) => player.isReady);
     
     return allPlayersReady ? Icons.check_circle : Icons.warning;
   }
@@ -224,7 +224,7 @@ class _HostLobbyScreenState extends State<HostLobbyScreen> {
     
     // Check if all non-host players are ready
     final nonHostPlayers = _lobby!.players.where((player) => player.id != 0).toList();
-    final allPlayersReady = nonHostPlayers.isNotEmpty && nonHostPlayers.every((player) => player.isReady);
+    final allPlayersReady = nonHostPlayers.every((player) => player.isReady);
     
     return allPlayersReady ? Colors.green : Colors.orange;
   }
@@ -233,24 +233,28 @@ class _HostLobbyScreenState extends State<HostLobbyScreen> {
   String _getStatusMessage() {
     if (_lobby == null) {
       return 'Initializing lobby...';
-    }
-    
-    // If no players besides host, show waiting message
-    if (_lobby!.players.length <= 1) {
+    } else if (_lobby!.players.length <= 1) {
       return 'Waiting for players to join...';
-    }
-    
-    // Check if all non-host players are ready
-    final nonHostPlayers = _lobby!.players.where((player) => player.id != 0).toList();
-    final allPlayersReady = nonHostPlayers.isNotEmpty && nonHostPlayers.every((player) => player.isReady);
-    
-    if (allPlayersReady) {
-      return 'All players are ready! You can start the game.';
     } else {
+      final nonHostPlayers = _lobby!.players.where((player) => player.id != 0).toList();
       final readyCount = nonHostPlayers.where((p) => p.isReady).length;
       final totalCount = nonHostPlayers.length;
       return '$readyCount of $totalCount players are ready...';
     }
+  }
+  
+  @override
+  void dispose() {
+    print('HostLobbyScreen being disposed');
+    
+    // If navigating away without starting the game, we need to clean up network resources
+    // This ensures server socket and all listening ports are closed
+    if (!widget.networkManager.isGameRunning) {
+      print('Game not started, cleaning up network resources');
+      widget.networkManager.dispose();
+    }
+    
+    super.dispose();
   }
   
   Widget _buildPlayerCard(Player player) {

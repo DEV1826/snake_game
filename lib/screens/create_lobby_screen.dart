@@ -16,8 +16,14 @@ class _CreateLobbyScreenState extends State<CreateLobbyScreen> {
 
   @override
   void dispose() {
+    print('CreateLobbyScreen being disposed');
     _nameController.dispose();
     _playerNameController.dispose();
+    
+    // Note: We don't need to dispose a network manager here because 
+    // we only create it when navigating to the HostLobbyScreen
+    // and that screen will handle cleanup if needed
+    
     super.dispose();
   }
 

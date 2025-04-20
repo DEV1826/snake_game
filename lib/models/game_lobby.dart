@@ -7,6 +7,7 @@ class GameLobby {
   final int port;
   final int maxPlayers;
   final List<Player> players;
+  final int currentPlayers;
 
   GameLobby({
     required this.hostName,
@@ -14,7 +15,10 @@ class GameLobby {
     required this.port,
     this.maxPlayers = 4,
     List<Player>? players,
-  }) : players = players ?? [];
+    int? currentPlayers,
+  }) : 
+    players = players ?? [],
+    currentPlayers = currentPlayers ?? (players?.length ?? 0);
 
   Map<String, dynamic> toJson() {
     return {
@@ -23,6 +27,7 @@ class GameLobby {
       'port': port,
       'maxPlayers': maxPlayers,
       'players': players.map((p) => p.toJson()).toList(),
+      'currentPlayers': currentPlayers,
     };
   }
 
@@ -35,6 +40,7 @@ class GameLobby {
       players: (json['players'] as List?)
           ?.map((p) => Player.fromJson(p))
           .toList() ?? [],
+      currentPlayers: json['currentPlayers'],
     );
   }
   

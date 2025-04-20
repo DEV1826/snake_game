@@ -52,10 +52,10 @@ class GameState {
     snakes.add(Snake(id, [Offset(startX, startY)], 'right', 2, isDead: false, score: 0));
   }
 
-  void spawnFood({int cols = 20, int rows = 20}) {
+  void spawnFood({int? cols, int? rows}) {
     // Ensure cols and rows are valid
-    cols = cols.clamp(1, 100);
-    rows = rows.clamp(1, 100);
+    cols = cols?.clamp(1, 100) ?? 20;
+    rows = rows?.clamp(1, 100) ?? 20;
     
     Random rand = Random();
     Offset pos;

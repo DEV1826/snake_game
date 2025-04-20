@@ -16,33 +16,38 @@ class FindGamesScreen extends StatefulWidget {
 }
 
 class _FindGamesScreenState extends State<FindGamesScreen> {
-  late SimpleNetworkManager _networkManager;
+  final SimpleNetworkManager _networkManager = SimpleNetworkManager(
+    onGameStateUpdate: (_) {},
+    onErrorMessage: (message) => print('Error: $message'),
+  );
+  
   List<GameLobby> _availableGames = [];
-  bool _isSearching = true;
+  bool _isSearching = false;
   bool _isConnecting = false;
   String? _errorMessage;
-
+  
+  // Add controllers for manual IP input
+  final TextEditingController _ipController = TextEditingController(text: "192.168.1.");
+  final TextEditingController _portController = TextEditingController(text: "35555");
+  bool _showManualInput = false;
+  
   @override
   void initState() {
     super.initState();
-    // Initialize network manager
-    _networkManager = SimpleNetworkManager(
-      onGameStateUpdate: (_) {}, // We don't need updates in this screen
-    );
-    _networkManager.initialize().then((_) => _startDiscovery());
+    _refreshGames();
   }
-
-  void _startDiscovery() {
+  
+  void _refreshGames() {
     setState(() {
       _isSearching = true;
-      _availableGames = []; // Clear previous games
       _errorMessage = null;
+      _availableGames = [];
     });
     
     // Initialize network manager if not already done
     _networkManager.initialize().then((_) {
       // Start actual discovery process
-      _networkManager.discoverHosts().then((discoveredGames) {
+      _networkManager.discoverGames().then((discoveredGames) {
         setState(() {
           _isSearching = false;
           _availableGames = discoveredGames;
@@ -63,12 +68,6 @@ class _FindGamesScreenState extends State<FindGamesScreen> {
         _errorMessage = "Network error: $error";
       });
     });
-  }
-
-  @override
-  void dispose() {
-    _networkManager.dispose();
-    super.dispose();
   }
 
   void _joinGame(GameLobby game) async {
@@ -129,6 +128,75 @@ class _FindGamesScreenState extends State<FindGamesScreen> {
         _isConnecting = false;
       });
     }
+  }
+
+  void _joinManualGame() async {
+    setState(() {
+      _isConnecting = true;
+      _errorMessage = null;
+    });
+    
+    // Show loading indicator
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(
+        child: CircularProgressIndicator(color: Colors.orange),
+      ),
+    );
+    
+    try {
+      // Initialize network manager if needed
+      await _networkManager.initialize();
+      
+      final ip = _ipController.text;
+      final port = int.parse(_portController.text);
+      
+      final success = await _networkManager.joinGame(
+        ip, 
+        port,
+        playerName: widget.playerName,
+      );
+      
+      // Close loading dialog
+      if (mounted && Navigator.canPop(context)) {
+        Navigator.pop(context);
+      }
+      
+      if (success && mounted) {
+        // Navigate to client lobby screen
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (context) => ClientLobbyScreen(
+              networkManager: _networkManager,
+              playerName: widget.playerName,
+            ),
+          ),
+        );
+      } else {
+        setState(() {
+          _errorMessage = "Failed to join the game. Please try again.";
+          _isConnecting = false;
+        });
+      }
+    } catch (e) {
+      // Close loading dialog
+      if (mounted && Navigator.canPop(context)) {
+        Navigator.pop(context);
+      }
+      
+      setState(() {
+        _errorMessage = "Error connecting: $e";
+        _isConnecting = false;
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _networkManager.dispose();
+    super.dispose();
   }
 
   @override
@@ -225,6 +293,81 @@ class _FindGamesScreenState extends State<FindGamesScreen> {
             ),
           ],
           
+          // Manual IP input
+          if (_showManualInput) ...[
+            Container(
+              margin: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: const Color(0xFF143B69),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.orange.withOpacity(0.5)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'MANUAL CONNECTION',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: _ipController,
+                    decoration: const InputDecoration(
+                      labelText: 'IP Address',
+                      border: OutlineInputBorder(),
+                      labelStyle: TextStyle(color: Colors.white),
+                      enabledBorder: OutlineInputBorder(
+                        borderSide: BorderSide(color: Colors.orange),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderSide: BorderSide(color: Colors.orange, width: 2),
+                      ),
+                    ),
+                    style: const TextStyle(color: Colors.white), // Make text visible
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: _portController,
+                    decoration: const InputDecoration(
+                      labelText: 'Port',
+                      border: OutlineInputBorder(),
+                      labelStyle: TextStyle(color: Colors.white),
+                      enabledBorder: OutlineInputBorder(
+                        borderSide: BorderSide(color: Colors.orange),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderSide: BorderSide(color: Colors.orange, width: 2),
+                      ),
+                    ),
+                    style: const TextStyle(color: Colors.white), // Make text visible
+                    keyboardType: TextInputType.number,
+                  ),
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 48,
+                    child: ElevatedButton(
+                      onPressed: _joinManualGame,
+                      child: const Text('JOIN GAME'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          
           // Refresh button
           Padding(
             padding: const EdgeInsets.all(16),
@@ -232,7 +375,7 @@ class _FindGamesScreenState extends State<FindGamesScreen> {
               width: double.infinity,
               height: 56,
               child: ElevatedButton.icon(
-                onPressed: _isConnecting ? null : _startDiscovery,
+                onPressed: _isConnecting ? null : _refreshGames,
                 icon: _isConnecting 
                     ? const SizedBox(
                         width: 24, 
@@ -245,6 +388,33 @@ class _FindGamesScreenState extends State<FindGamesScreen> {
                     : const Icon(Icons.refresh),
                 label: Text(
                   _isConnecting ? 'CONNECTING...' : 'REFRESH',
+                  style: const TextStyle(fontSize: 16),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.orange,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          
+          // Toggle manual IP input
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: SizedBox(
+              width: double.infinity,
+              height: 56,
+              child: ElevatedButton(
+                onPressed: () {
+                  setState(() {
+                    _showManualInput = !_showManualInput;
+                  });
+                },
+                child: Text(
+                  _showManualInput ? 'HIDE MANUAL INPUT' : 'SHOW MANUAL INPUT',
                   style: const TextStyle(fontSize: 16),
                 ),
                 style: ElevatedButton.styleFrom(
